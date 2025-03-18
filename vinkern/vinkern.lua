@@ -4,7 +4,7 @@ local gpu = component.proxy(component.list("gpu")())
 local screen = component.list("screen")()
 
 _G.KERNELVER = "vinkern 0.0.b"
-_G.OSVER     = "vinos 0.0.b"
+_G.OSVER     = "vinsys 0.0.b"
 
 Kernel = {}
 Kernel.term = {}
