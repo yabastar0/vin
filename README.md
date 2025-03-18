@@ -45,7 +45,7 @@ This is ran by the kernel typically, but updates the cursor based on the data in
 \
 `Kernel.http(request:table):many`\
 Formatted `{type, url [, postData]}`.\
-type is `get`, `post`, `request`, `checkURLAsync`, `checkURL`.\
+type is `get`, `post`, `request`, `checkURLAsync`, `checkURL`.
 
 ## Kernel.term
 
@@ -86,8 +86,7 @@ Scrolls the term up by 1\
 Clears the terminal with the current background color\
 \
 `Kernel.term.clearLine([line:number])`\
-Clears the current line. If `line` is provided, clears the data on that line\
-\
+Clears the current line. If `line` is provided, clears the data on that line
 
 ## Kernel.io
 
