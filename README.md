@@ -46,7 +46,6 @@ This is ran by the kernel typically, but updates the cursor based on the data in
 `Kernel.http(request:table):many`\
 Formatted `{type, url [, postData]}`.\
 type is `get`, `post`, `request`, `checkURLAsync`, `checkURL`.\
-\
 
 ## Kernel.term
 
