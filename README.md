@@ -100,8 +100,7 @@ Writes text, updates cursor, but no scrolling function\
 Essentially the same as `io.write`. Slightly faster than it if writing a single char\
 \
 `Kernel.io.slowWrite(msg:str, delay:number)`\
-Writes characters onto the display with a set delay between each character\
-\
+Writes characters onto the display with a set delay between each character
 
 ## Kernel variables
 
