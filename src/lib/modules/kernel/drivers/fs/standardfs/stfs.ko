@@ -1,0 +1,43 @@
+local component = component or require("component")
+local fsObj = {}
+local fsExt = {}
+
+
+Kernel.io.print("stfs.ko running")
+
+-- Function to detect and classify drives
+local function findDrives()
+    local drives = {}
+    local primaryDrive = component.filesystem and component.filesystem.address -- Check for boot drive
+
+    for address in component.list("filesystem") do
+        local fs = component.proxy(address)
+
+        -- Check the actual type of the component
+        local compType = component.type(address)
+
+        -- Ignore EEPROM (not a real filesystem)
+        if compType == "eeprom" then
+            Kernel.io.print("Skipping EEPROM: " .. address)
+        else
+            -- Determine drive type
+            local driveType = "extra"
+            if primaryDrive and address == primaryDrive then
+                driveType = "primary"
+            elseif fs.isReadOnly() then
+                driveType = "floppy"
+            end
+
+            drives[address] = {fs = fs, type = driveType}
+            Kernel.io.print(string.format("Drive found: [%s] = {fs object, %s}", address, driveType))
+        end
+    end
+
+    return drives
+end
+
+local allDrives = findDrives()
+
+for addr, data in pairs(allDrives) do
+    Kernel.io.print(string.format("[%s] = {fs object, %s}", addr, data.type))
+end
