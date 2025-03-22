@@ -1,7 +1,5 @@
 local component = component or require("component")
 local computer  = computer or require("computer")
-local gpu       = component.proxy(component.list("gpu")())
-local screen    = component.list("screen")()
 
 _G.KERNELVER    = "vinkern 0.0.b"
 _G.OSVER        = "vinsys 0.0.b"
@@ -12,9 +10,19 @@ Kernel.io       = {}
 
 Kernel.stfs     = "/lib/modules/kernel/drivers/fs/standardfs/stfs.ko"
 
-if gpu and screen then gpu.bind(screen) end
+_G.HasGPU       = false
+_G.HasScreen    = false
+_G.Res          = {}
+
+local gpu       = component.proxy(component.list("gpu")())
+local screen    = component.list("screen")()
+
+if gpu then HasGPU = true end
+if screen then HasScreen = true end
+if gpu and screen then gpu.bind(screen); CanDisplay = true end
 
 local w, h = gpu.getResolution()
+_G.Res = {w, h}
 
 Kernel.cursor = {
     ["pos"] = { 1, 1 },
@@ -44,30 +52,34 @@ local old_shutdown = computer.shutdown
 
 Kernel.panic = error
 error = function(err)
-    Kernel.term.setTextColor(0xFF0000)
-    Kernel.io.print(err)
-    Kernel.io.print(debug.traceback())
-    Kernel.term.setTextColor(0xFFFFFF)
+    if _G.HasGPU then
+        gpu.setForeground(0xFF0000)
+        Kernel.io.print(err)
+        Kernel.io.print(debug.traceback())
+        gpu.setForeground(0xFFFFFF)
+    end
 end
 
 local safeError = function(err)
-    local oldGPU = gpu
-    gpu = component.proxy(component.list("gpu")())
-    valifyCursor()
-    local position = Kernel.cursor.pos
+    if _G.HasGPU then
+        local oldGPU = gpu
+        gpu = component.proxy(component.list("gpu")())
+        valifyCursor()
+        local position = Kernel.cursor.pos
 
-    gpu.setBackground(0x000000)
-    gpu.setForeground(0xFFFFFF)
-    gpu.set(1, position[2] + 1, "Kernel recovered after error: ")
-    gpu.setForeground(0xFF0000)
-    gpu.set(1 + #("Kernel recovered after error: "), position[2] + 1, err)
-    gpu.setForeground(0xFFFFFF)
+        gpu.setBackground(0x000000)
+        gpu.setForeground(0xFFFFFF)
+        gpu.set(1, position[2] + 1, "Kernel recovered after error: ")
+        gpu.setForeground(0xFF0000)
+        gpu.set(1 + #("Kernel recovered after error: "), position[2] + 1, err)
+        gpu.setForeground(0xFFFFFF)
 
-    Kernel.cursor.pos[1] = 1
-    Kernel.cursor.pos[2] = position[2] + 2
+        Kernel.cursor.pos[1] = 1
+        Kernel.cursor.pos[2] = position[2] + 2
 
-    gpu.setForeground(0xFFFFFF)
-    gpu = oldGPU
+        gpu.setForeground(0xFFFFFF)
+        gpu = oldGPU
+    end
 end
 
 local function safeCall(func)
@@ -105,46 +117,7 @@ end
 
 computer.shutdown = safeCall(computer.shutdown)
 
-function Kernel.term.setTextColor(color) if gpu then gpu.setForeground(color) end end
 
-function Kernel.term.getTextColor() if gpu then return gpu.getForeground() end end
-
-function Kernel.term.setBackground(color) if gpu then gpu.setBackground(color) end end
-
-function Kernel.term.getBackground() if gpu then return gpu.getBackground() end end
-
-function Kernel.term.get(x, y) if gpu then return gpu.get(x, y) end end
-
-function Kernel.term.set(x, y, value) if gpu then return gpu.set(x, y, value) end end
-
-function Kernel.term.copy(x, y, w, h, tx, ty) if gpu then return gpu.copy(x, y, w, h, tx, ty) end end
-
-function Kernel.term.fill(x, y, w, h, char) if gpu then return gpu.fill(x, y, w, h, char) end end
-
-function Kernel.term.getGPU() if gpu then return gpu end end
-
-function Kernel.term.setGPU(setGPU)
-    if setGPU then
-        gpu = setGPU; w, h = gpu.getResolution()
-    end
-end
-
-function Kernel.term.scrollUp()
-    Kernel.term.copy(1, 2, w, h - 1, 0, -1)
-    Kernel.term.fill(1, h, w, 1, " ")
-end
-
-function Kernel.term.clear()
-    Kernel.term.fill(1, 1, h, w, " ")
-end
-
-function Kernel.term.clearLine(line)
-    if line then
-        Kernel.term.fill(1, line, 1, w, " ")
-    else
-        Kernel.term.fill(1, Kernel.cursor.pos[2], 1, w, " ")
-    end
-end
 
 function Kernel.io.print(...)
     local msg = table.concat({ ... }, " ")
@@ -152,14 +125,16 @@ function Kernel.io.print(...)
     local position = Kernel.cursor.pos
 
     for line in string.gmatch(msg, "([^\n]*)\n?") do
-        if gpu and screen then
-            Kernel.term.set(position[1], position[2], line)
+        if _G.CanDisplay then
+            gpu.set(position[1], position[2], line)
 
-            if position[2] == h then
-                Kernel.term.scrollUp()
-                position[1] = 1
+            if position[2] == _G.Res[2] then
+                gpu.copy(1, 2, _G.Res[1], _G.Res[2] - 1, 0, -1)
+                gpu.fill(1, _G.Res[2], _G.Res[1], 1, " ")
+                Kernel.cursor.pos[1] = 1
             else
                 Kernel.cursor.pos[2] = position[2] + 1
+                Kernel.cursor.pos[1] = 1
             end
         end
     end
@@ -171,8 +146,8 @@ function Kernel.io.write(msg)
     msg = tostring(msg)
     local position = Kernel.cursor.pos
 
-    if gpu and screen then
-        Kernel.term.set(position[1], position[2], msg)
+    if _G.CanDisplay then
+        gpu.set(position[1], position[2], msg)
         Kernel.cursor.pos[1] = position[1] + #msg
     end
 end
@@ -181,8 +156,8 @@ Kernel.io.write = safeCall(Kernel.io.write)
 
 function Kernel.io.writeChar(char)
     local position = Kernel.cursor.pos
-    if #char == 1 then
-        Kernel.term.set(position[1], position[2], char)
+    if #char == 1 and _G.CanDisplay then
+        gpu.set(position[1], position[2], char)
         Kernel.cursor.pos[1] = position[1] + 1
     end
 end
@@ -320,26 +295,31 @@ function Kernel.updateCursor()
     if isActive then
         if not isVisible then
             savedChar, savedForeground, savedBackground = gpu.get(position[1], position[2])
+            if _G.CanDisplay then
+                gpu.setForeground(savedBackground)
+                gpu.setBackground(savedForeground)
 
-            gpu.setForeground(savedBackground)
-            gpu.setBackground(savedForeground)
+                gpu.set(position[1], position[2], savedChar)
 
-            gpu.set(position[1], position[2], savedChar)
-
-            gpu.setBackground(savedBackground)
-            gpu.setForeground(savedForeground)
+                gpu.setBackground(savedBackground)
+                gpu.setForeground(savedForeground)
+            end
         else
-            gpu.setForeground(savedForeground)
-            gpu.setBackground(savedBackground)
-            gpu.set(position[1], position[2], savedChar)
+            if _G.CanDisplay then
+                gpu.setForeground(savedForeground)
+                gpu.setBackground(savedBackground)
+                gpu.set(position[1], position[2], savedChar)
+            end
         end
         Kernel.cursor.visible = not Kernel.cursor.visible
     else
         if isVisible then
-            savedChar, savedForeground, savedBackground = gpu.get(position[1], position[2])
-            gpu.setForeground(savedBackground)
-            gpu.setBackground(savedForeground)
-            gpu.set(position[1], position[2], savedChar)
+            if _G.CanDisplay then
+                savedChar, savedForeground, savedBackground = gpu.get(position[1], position[2])
+                gpu.setForeground(savedBackground)
+                gpu.setBackground(savedForeground)
+                gpu.set(position[1], position[2], savedChar)
+            end
             Kernel.cursor.visible = not Kernel.cursor.visible
         end
     end
@@ -645,48 +625,111 @@ function Kernel.SignalSystem.pullFiltered(...)
     until false
 end
 
-Kernel.SignalSystem.push = safeCall(computer.pushSignal)
-
-Kernel.SignalSystem.listen("key_down", function(_, _, key)
-    Kernel.io.print(("Key pressed: " .. string.char(key)) or "Unknown key")
-end)
-
+function Kernel.io.read()
+    Kernel.cursor.active = true
+    local fullText = ""
+    while true do
+        local evt, _, chr, _ = computer.pullSignal(0.5)
+        if evt == "key_down" and chr then
+            if chr == 13 then break end
+            if chr == 8 then
+                fullText = string.sub(fullText, 1, -2)
+                if _G.CanDisplay then
+                    gpu.set(Kernel.cursor.pos[1], Kernel.cursor.pos[2], " ")
+                end
+                Kernel.cursor.pos[1] = Kernel.cursor.pos[1] - 1
+            else
+                fullText = fullText .. string.char(chr)
+                Kernel.io.writeChar(string.char(chr))
+            end
+        end
+        Kernel.updateCursor()
+    end
+    Kernel.cursor.active = false
+    return fullText
+end
 
 local fsAddress = nil
-if not component.filesystem then
-    for address in component.list("filesystem") do
-        Kernel.io.print("Found filesystem: " .. address)
-        if not fsAddress then
-            fsAddress = address
+
+if component.filesystem then
+    local defaultFS = component.proxy(component.filesystem.address)
+    if defaultFS and defaultFS.exists(Kernel.stfs) then
+        fsAddress = component.filesystem.address
+        Kernel.io.print("[info] Using default filesystem with " .. Kernel.stfs .. ": " .. fsAddress)
+    end
+end
+
+function Kernel.getScript(path)
+    if not fsAddress then
+        for retry = 1, 3 do
+            for address in component.list("filesystem") do
+                Kernel.io.print("[chk ] Testing filesystem: " .. address)
+                local success, fs = pcall(component.proxy, address)
+                if success and fs and fs.exists(path) then
+                    fsAddress = address
+                    Kernel.io.print("[info] Found valid filesystem: " .. fsAddress)
+                    break
+                end
+            end
+            if fsAddress then break end
+            Kernel.io.print("[warn] No suitable filesystem found, retry " .. retry .. "/3")
+            Kernel.sleep(1)
         end
     end
 
     if not fsAddress then
-        error("No filesystem component found! Please ensure a drive is attached.")
+        error("No filesystem containing " .. path .. " found!")
     end
 
-    Kernel.io.print("Using filesystem with address: " .. fsAddress)
-else
-    Kernel.io.print("Filesystem already available at: " .. component.filesystem.address)
+    local fsObj
+    for _ = 1, 3 do
+        fsObj = component.proxy(fsAddress)
+        if fsObj then break end
+        Kernel.io.print("[warn] Failed to get filesystem proxy, retrying...")
+        Kernel.sleep(1)
+    end
+
+    if not fsObj then
+        Kernel.panic("Critical error: Cannot access filesystem!")
+    end
+
+    Kernel.io.print("[load] Loading script:", path)
+
+    local fHandle = fsObj.open(path, "r")
+    if not fHandle then
+        error("Error: Failed to open " .. path)
+    end
+
+    local script = ""
+    while true do
+        local chunk = fsObj.read(fHandle, 1024)
+        if not chunk then break end
+        script = script .. chunk
+    end
+
+    fsObj.close(fHandle)
+
+    if script == "" then
+        error("Error: Script " .. path .. " is empty or failed to load")
+    end
+
+    local func, err = load(script, "=" .. path, "t", _ENV)
+    if not func then
+        error("Error loading: " .. err)
+    end
+    return func
 end
 
-local fsObj = component.proxy(fsAddress)
-component.filesystem = fsObj
+Kernel.getScript(Kernel.stfs)()
 
-local stfsHandle = fsObj.open(Kernel.stfs, "r")
+local drivers = stfs.list(stfs.primary, "/lib/modules/kernel/drivers/")
 
-local script = ""
-while true do
-    local chunk = fsObj.read(stfsHandle, 1024)
-    if not chunk then break end
-    script = script .. chunk
+for _,path in ipairs(drivers) do
+    local oldPath = path
+    path = "/lib/modules/kernel/drivers/" .. path
+    if stfs.isDirectory(stfs.primary, path) then goto continue end
+    Kernel.io.print("[load] Driver detected:",oldPath)
+    Kernel.getScript(path)()
+    Kernel.io.print("[info] Finished")
+    ::continue::
 end
-
-fsObj.close(stfsHandle)
-
-local func, err = load(script, "=" .. Kernel.stfs, "t", _ENV)
-if not func then
-    error("Error loading: " .. err)
-end
-
-func()
