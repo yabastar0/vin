@@ -1,43 +1,298 @@
 local component = component or require("component")
-local fsObj = {}
-local fsExt = {}
+local computer = computer or require("computer")
 
+local CALL_BUDGET = 5
+local TIME_WINDOW = 1
+local callCount = 0
+local lastReset = computer.uptime()
 
-Kernel.io.print("stfs.ko running")
+local function checkBudget()
+    if computer.uptime() - lastReset >= TIME_WINDOW then
+        callCount = 0
+        lastReset = computer.uptime()
+    end
+    if callCount < CALL_BUDGET then
+        callCount = callCount + 1
+        return true
+    end
+    return false
+end
 
--- Function to detect and classify drives
 local function findDrives()
     local drives = {}
-    local primaryDrive = component.filesystem and component.filesystem.address -- Check for boot drive
+    local addresses = {}
 
-    for address in component.list("filesystem") do
-        local fs = component.proxy(address)
-
-        -- Check the actual type of the component
-        local compType = component.type(address)
-
-        -- Ignore EEPROM (not a real filesystem)
-        if compType == "eeprom" then
-            Kernel.io.print("Skipping EEPROM: " .. address)
-        else
-            -- Determine drive type
-            local driveType = "extra"
-            if primaryDrive and address == primaryDrive then
-                driveType = "primary"
-            elseif fs.isReadOnly() then
-                driveType = "floppy"
-            end
-
-            drives[address] = {fs = fs, type = driveType}
-            Kernel.io.print(string.format("Drive found: [%s] = {fs object, %s}", address, driveType))
+    for _ = 1, 3 do
+        addresses = {}
+        for address in component.list("filesystem") do
+            table.insert(addresses, address)
         end
+        if #addresses > 0 then break end
+        Kernel.io.print("[warn] No filesystem components detected, retrying...")
+        Kernel.sleep(1)
+    end
+
+    if #addresses == 0 then
+        error("[err ] No filesystem components found after multiple attempts")
+        return drives
+    end
+
+    for _, address in ipairs(addresses) do
+        while not checkBudget() do
+            Kernel.io.print("[info] Call budget exceeded, waiting...")
+            Kernel.sleep(0.5)
+        end
+
+        local fs = component.proxy(address)
+        if fs then
+            table.insert(drives, {addr = address, fs = fs})
+            Kernel.io.print(string.format("[ ok ] Drive found: [%s]", address))
+        else
+            Kernel.io.print(string.format("[warn] Failed to proxy drive [%s]", address))
+        end
+    end
+
+    if #drives == 0 then
+        Kernel.io.print("[warn] No valid drives detected!")
     end
 
     return drives
 end
 
+local function findPrimaryDrive(drives)
+    if #drives == 0 then
+        error("[err ] No drives available to determine primary drive.")
+    end
+
+    local bestDrive = nil
+    local maxSpace = 0
+
+    for _, drive in ipairs(drives) do
+        if drive.fs.exists and drive.fs.exists("/boot") then
+            Kernel.io.print(string.format("[ ok ] Primary drive identified by /boot: [%s]", drive.addr))
+            return drive
+        end
+
+        if drive.fs.spaceTotal and drive.fs.spaceUsed then
+            local freeSpace = drive.fs.spaceTotal() - drive.fs.spaceUsed()
+            if freeSpace > maxSpace then
+                maxSpace = freeSpace
+                bestDrive = drive
+            end
+        end
+    end
+
+    if bestDrive then
+        Kernel.io.print(string.format("[ ok ] Primary drive selected by space: [%s]", bestDrive.addr))
+        return bestDrive
+    else
+        error("[err ] No valid primary drive found.")
+    end
+end
+
 local allDrives = findDrives()
 
-for addr, data in pairs(allDrives) do
-    Kernel.io.print(string.format("[%s] = {fs object, %s}", addr, data.type))
+_G.stfs = {}
+_G.stfs.primary = findPrimaryDrive(allDrives)
+
+function stfs.getDrives()
+    return allDrives
+end
+
+function stfs.checkDrives()
+    allDrives = findDrives()
+    return allDrives
+end
+
+
+function stfs.getDrive(drive)
+    return drive and drive.fs or stfs.drive
+end
+
+function stfs.spaceUsed(drive)
+    local fs = stfs.getDrive(drive)
+    if fs and fs.spaceUsed then
+        return fs.spaceUsed()
+    else
+        error("[err ] Invalid drive or spaceUsed function missing")
+    end
+end
+
+function stfs.spaceTotal(drive)
+    local fs = stfs.getDrive(drive)
+    if fs and fs.spaceTotal then
+        return fs.spaceTotal()
+    else
+        error("[err ] Invalid drive or spaceTotal function missing")
+    end
+end
+
+function stfs.open(drive, path, mode)
+    local fs = stfs.getDrive(drive)
+    if not fs or not fs.open then
+        error("[err ] Invalid drive or open function missing")
+    end
+
+    local handle = fs.open(path, mode)
+    if not handle then
+        error(string.format("[err ] Failed to open file: %s", path))
+    end
+
+    return {
+        drive = drive,
+        handle = handle,
+
+        write = function(self, data)
+            if not self.handle or not fs.write then
+                error("[err ] Invalid file handle or write function missing")
+            end
+            return fs.write(self.handle, data)
+        end,
+
+        read = function(self, count)
+            if not self.handle or not fs.read then
+                error("[err ] Invalid file handle or read function missing")
+            end
+            return fs.read(self.handle, count)
+        end,
+
+        seek = function(self, whence, offset)
+            if not self.handle or not fs.seek then
+                error("[err ] Invalid file handle or seek function missing")
+            end
+            return fs.seek(self.handle, whence, offset)
+        end,
+
+        close = function(self)
+            if not self.handle or not fs.close then
+                error("[err ] Invalid file handle or close function missing")
+            end
+            fs.close(self.handle)
+            self.handle = nil
+        end
+    }
+end
+
+function stfs.touch(drive, path)
+    local handle = stfs.open(drive, path, "w")
+    handle:close()
+    return true
+end
+
+function stfs.mkDir(drive, path)
+    local fs = stfs.getDrive(drive)
+    if fs and fs.makeDirectory then
+        return fs.makeDirectory(path)
+    else
+        error("[err ] Invalid drive or makeDirectory function missing")
+    end
+end
+
+function stfs.exists(drive, path)
+    local fs = stfs.getDrive(drive)
+    if fs and fs.exists then
+        return fs.exists(path)
+    else
+        error("[err ] Invalid drive or exists function missing")
+    end
+end
+
+function stfs.isReadOnly(drive)
+    local fs = stfs.getDrive(drive)
+    if fs and fs.isReadOnly then
+        return fs.isReadOnly()
+    else
+        error("[err ] Invalid drive or isReadOnly function missing")
+    end
+end
+
+function stfs.write(drive, path, data)
+    local file = stfs.open(drive, path, "w")
+    file:write(data)
+    file:close()
+end
+
+function stfs.append(drive, path, data)
+    local file = stfs.open(drive, path, "a")
+    file:write(data)
+    file:close()
+end
+
+function stfs.list(drive, path)
+    local fs = stfs.getDrive(drive)
+    if fs and fs.list then
+        return fs.list(path)
+    else
+        error("[err ] Invalid drive or list function missing")
+    end
+end
+
+function stfs.lastModified(drive, path)
+    local fs = stfs.getDrive(drive)
+    if fs and fs.lastModified then
+        return fs.lastModified(path)
+    else
+        error("[err ] Invalid drive or lastModified function missing")
+    end
+end
+
+function stfs.getLabel(drive)
+    local fs = stfs.getDrive(drive)
+    if fs and fs.getLabel then
+        return fs.getLabel()
+    else
+        error("[err ] Invalid drive or getLabel function missing")
+    end
+end
+
+function stfs.setLabel(drive, label)
+    local fs = stfs.getDrive(drive)
+    if fs and fs.setLabel then
+        return fs.setLabel(label)
+    else
+        error("[err ] Invalid drive or setLabel function missing")
+    end
+end
+
+function stfs.remove(drive, path)
+    local fs = stfs.getDrive(drive)
+    if fs and fs.remove then
+        return fs.remove(path)
+    else
+        error("[err ] Invalid drive or remove function missing")
+    end
+end
+
+function stfs.size(drive, path)
+    local fs = stfs.getDrive(drive)
+    if fs and fs.size then
+        return fs.size(path)
+    else
+        error("[err ] Invalid drive or size function missing")
+    end
+end
+
+function stfs.read(drive, path, count)
+    local file = stfs.open(drive, path, "r")
+    local data = file:read(count)
+    file:close()
+    return data
+end
+
+function stfs.rename(drive, oldPath, newPath)
+    local fs = stfs.getDrive(drive)
+    if fs and fs.rename then
+        return fs.rename(oldPath, newPath)
+    else
+        error("[err ] Invalid drive or rename function missing")
+    end
+end
+
+function stfs.isDirectory(drive, path)
+    local fs = stfs.getDrive(drive)
+    if fs and fs.isDirectory then
+        return fs.isDirectory(path)
+    else
+        error("[err ] Invalid drive or isDirectory function missing")
+    end
 end
