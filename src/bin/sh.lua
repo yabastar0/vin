@@ -1,16 +1,18 @@
-local currentPath = "/"
+_G.shell = {}
+_G.shell.currentPath = "/"
 local io = Kernel.io
 
 local function helpPage()
     io.print("Available commands:")
-    io.print("ls","cd","pwd","mkdir","rm","cp","mv","touch","cat","head","tail","free","ping","wget","clr","help")
+    io.print("ls", "cd", "pwd", "mkdir", "rm", "cp", "mv", "touch", "cat",
+             "head", "tail", "free", "ping", "wget", "clr", "help")
 end
 
 local function shellLoop()
     io.print("vinsh shell")
     while true do
         term.setTextColor(0x00AAFF)
-        io.write(currentPath)
+        io.write(shell.currentPath)
         term.setTextColor(0xFFFFFF)
         io.write("#")
         local cmd = io.read()
@@ -20,15 +22,21 @@ local function shellLoop()
 
         if tokens[1] == "ls" then
             local usePath
-            if tokens[2] then usePath = stfs.combine(currentPath, tokens[2]) else usePath = currentPath end
-
-            if (not stfs.exists(stfs.primary, currentPath)) or (not stfs.isDirectory(stfs.primary, currentPath)) then
-                currentPath = "/"
+            if tokens[2] then
+                usePath = stfs.combine(shell.currentPath, tokens[2])
+            else
+                usePath = shell.currentPath
             end
 
-            if (not stfs.exists(stfs.primary, usePath)) or (not stfs.isDirectory(stfs.primary, usePath)) then
+            if (not stfs.exists(stfs.primary, shell.currentPath)) or
+                (not stfs.isDirectory(stfs.primary, shell.currentPath)) then
+                shell.currentPath = "/"
+            end
+
+            if (not stfs.exists(stfs.primary, usePath)) or
+                (not stfs.isDirectory(stfs.primary, usePath)) then
                 io.print("Extended path", tokens[2], "is not valid")
-                usePath = currentPath
+                usePath = shell.currentPath
             end
 
             local ls = stfs.list(stfs.primary, usePath)
@@ -45,76 +53,95 @@ local function shellLoop()
             end
 
             for _, dir in ipairs(directories) do
-                term.setTextColor(0x0000CF)
+                term.setTextColor(0x0000F0)
                 io.print(dir)
                 term.setTextColor(0xCCCCCC)
             end
 
-            for _, file in ipairs(files) do
-                io.print(file)
-            end
+            for _, file in ipairs(files) do io.print(file) end
             term.setTextColor(0xFFFFFF)
         elseif tokens[1] == "cd" then
-            local usePath
-            if tokens[2] then usePath = stfs.combine(currentPath, tokens[2]) else usePath = currentPath end
-            if (not stfs.exists(stfs.primary, currentPath)) or (not stfs.isDirectory(stfs.primary, currentPath)) then
-                currentPath = "/"
-            end
+            local cwdTokens = stfs.getTokens(shell.currentPath)
+            local pathTokens = stfs.getTokensRaw(tokens[2])
 
-            if (not stfs.exists(stfs.primary, usePath)) or (not stfs.isDirectory(stfs.primary, usePath)) then
-                io.print("Path", tokens[2], "is not valid")
-                usePath = currentPath
-            end
-
-            currentPath = usePath .. "/"
-        elseif tokens[1] == "pwd" then
-            io.print(currentPath)
-        elseif tokens[1] == "mkdir" then
-            stfs.mkDir(stfs.primary, stfs.combine(currentPath,tokens[2]))
-        elseif tokens[1] == "rm" then
-            stfs.remove(stfs.primary, stfs.combine(currentPath,tokens[2]))
-        elseif tokens[1] == "cp" then
-            if stfs.exists(stfs.primary, stfs.combine(currentPath,tokens[3])) then
-                io.print("The specified path already exists. Continue? [y/n]:")
-                local ans = io.read()
-                if string.lower(ans) ~= "y" then
-                    goto continue
+            if tokens[2] == "/" then
+                cwdTokens = {}
+            else
+                for _, token in ipairs(pathTokens) do
+                    if token ~= ".." and token ~= "." then
+                        table.insert(cwdTokens, token)
+                    elseif token == ".." and #cwdTokens > 0 then
+                        table.remove(cwdTokens)
+                    end
                 end
             end
 
-            local file = stfs.open(stfs.primary, stfs.combine(currentPath,tokens[2]), "r")
+            local cwdConcat = "/" .. table.concat(cwdTokens, "/")
+            if cwdConcat ~= "/" then
+                cwdConcat = cwdConcat .. "/"
+            end
+
+            if stfs.exists(stfs.primary, cwdConcat) then
+                shell.currentPath = cwdConcat
+            else
+                io.print("Invalid path " .. cwdConcat)
+            end
+        elseif tokens[1] == "pwd" then
+            io.print(shell.currentPath)
+        elseif tokens[1] == "mkdir" then
+            stfs.mkDir(stfs.primary, stfs.combine(shell.currentPath, tokens[2]))
+        elseif tokens[1] == "rm" then
+            stfs.remove(stfs.primary, stfs.combine(shell.currentPath, tokens[2]))
+        elseif tokens[1] == "cp" then
+            if stfs.exists(stfs.primary,
+                           stfs.combine(shell.currentPath, tokens[3])) then
+                io.print("The specified path already exists. Continue? [y/n]:")
+                local ans = io.read()
+                if string.lower(ans) ~= "y" then goto continue end
+            end
+
+            local file = stfs.open(stfs.primary,
+                                   stfs.combine(shell.currentPath, tokens[2]),
+                                   "r")
             local data = file:readAll()
             file:close()
 
-            local writeFile = stfs.open(stfs.primary, stfs.combine(currentPath,tokens[3]), "w")
+            local writeFile = stfs.open(stfs.primary, stfs.combine(
+                                            shell.currentPath, tokens[3]), "w")
             writeFile:write(data)
             writeFile:close()
         elseif tokens[1] == "mv" then
-            if stfs.exists(stfs.primary, stfs.combine(currentPath,tokens[3])) then
+            if stfs.exists(stfs.primary,
+                           stfs.combine(shell.currentPath, tokens[3])) then
                 io.print("The specified path already exists. Continue? [y/n]:")
                 local ans = io.read()
-                if string.lower(ans) ~= "y" then
-                    goto continue
-                end
+                if string.lower(ans) ~= "y" then goto continue end
             end
 
-            local file = stfs.open(stfs.primary, stfs.combine(currentPath,tokens[2]), "r")
+            local file = stfs.open(stfs.primary,
+                                   stfs.combine(shell.currentPath, tokens[2]),
+                                   "r")
             local data = file:readAll()
             file:close()
-            stfs.remove(stfs.primary, stfs.combine(currentPath,tokens[2]))
+            stfs.remove(stfs.primary, stfs.combine(shell.currentPath, tokens[2]))
 
-            local writeFile = stfs.open(stfs.primary, stfs.combine(currentPath,tokens[3]), "w")
+            local writeFile = stfs.open(stfs.primary, stfs.combine(
+                                            shell.currentPath, tokens[3]), "w")
             writeFile:write(data)
             writeFile:close()
         elseif tokens[1] == "touch" then
-            stfs.touch(stfs.primary, stfs.combine(currentPath,tokens[2]))
+            stfs.touch(stfs.primary, stfs.combine(shell.currentPath, tokens[2]))
         elseif tokens[1] == "cat" then
-            local file = stfs.open(stfs.primary, stfs.combine(currentPath,tokens[2]), "r")
+            local file = stfs.open(stfs.primary,
+                                   stfs.combine(shell.currentPath, tokens[2]),
+                                   "r")
             local data = file:readAll()
             file:close()
             io.print(data)
         elseif tokens[1] == "head" then
-            local file = stfs.open(stfs.primary, stfs.combine(currentPath,tokens[3]), "r")
+            local file = stfs.open(stfs.primary,
+                                   stfs.combine(shell.currentPath, tokens[3]),
+                                   "r")
             if not file then
                 io.print("Could not read file")
                 goto continue
@@ -143,7 +170,9 @@ local function shellLoop()
 
             file:close()
         elseif tokens[1] == "tail" then
-            local file = stfs.open(stfs.primary, stfs.combine(currentPath,tokens[3]), "r")
+            local file = stfs.open(stfs.primary,
+                                   stfs.combine(shell.currentPath, tokens[3]),
+                                   "r")
             if not file then
                 io.print("Could not read file")
                 goto continue
@@ -183,17 +212,24 @@ local function shellLoop()
         elseif tokens[1] == "free" then
             io.print(computer.freeMemory(), "/", computer.totalMemory())
         elseif tokens[1] == "ping" then
-            io.print("Due to the way OC works, this is only accurate to 5 ms")
-            if not Kernel.hasInternet then
+            local interAddr = component.list("internet")()
+            if not interAddr then
                 io.print("You are not connected to the internet")
                 goto continue
             end
-            local interAddr = component.list("internet")()
             local internet = component.proxy(interAddr)
-
+            io.print("Due to the way OC works, this is only accurate to 5 ms")
             for _ = 1, 4 do
                 local start = computer.uptime()
                 local handle = internet.request(tokens[2])
+
+                if not handle then
+                    handle = internet.request("https://" .. tokens[2])
+                end
+
+                if not handle then
+                    handle = internet.request("http://" .. tokens[2])
+                end
 
                 if not handle then
                     io.print("Failed to make request")
@@ -201,7 +237,9 @@ local function shellLoop()
                 end
                 local endt = computer.uptime()
 
-                io.print("ping @", (math.floor(((endt - start) * 1000) + 0.5)) / 1000, "seconds")
+                io.print("ping @",
+                         (math.floor(((endt - start) * 1000) + 0.5)) / 1000,
+                         "seconds")
                 Kernel.sleep(1)
             end
         elseif tokens[1] == "wget" then
@@ -211,23 +249,27 @@ local function shellLoop()
                 io.print("You are not connected to the internet")
                 goto continue
             end
-            if stfs.exists(stfs.primary, stfs.combine(currentPath,tokens[3])) then
+            if stfs.exists(stfs.primary,
+                           stfs.combine(shell.currentPath, tokens[3])) then
                 io.print("The specified path already exists. Continue? [y/n]:")
                 local ans = io.read()
-                if string.lower(ans) ~= "y" then
-                    goto continue
-                end
+                if string.lower(ans) ~= "y" then goto continue end
             end
 
-            local data = Kernel.http({ "get", stfs.combine(currentPath,tokens[2]) })
+            local data = Kernel.http({
+                "get", stfs.combine(shell.currentPath, tokens[2])
+            })
 
-            local file = stfs.open(stfs.primary, stfs.combine(currentPath,tokens[3]), "w")
+            local file = stfs.open(stfs.primary,
+                                   stfs.combine(shell.currentPath, tokens[3]),
+                                   "w")
             file:write(data)
             file:close()
         elseif tokens[1] == "clr" or tokens[1] == "clear" then
             term.clear()
-        elseif stfs.exists(stfs.primary, stfs.combine(currentPath,tokens[1])) then
-            Kernel.getScript(stfs.combine(currentPath,tokens[1]))()
+        elseif stfs.exists(stfs.primary,
+                           stfs.combine(shell.currentPath, tokens[1])) then
+            Kernel.getScript(stfs.combine(shell.currentPath, tokens[1]))()
         else
             helpPage()
         end
@@ -236,6 +278,6 @@ local function shellLoop()
 end
 
 while true do
-    local _,err = pcall(shellLoop)
+    local _, err = pcall(shellLoop)
     io.print(err)
 end
