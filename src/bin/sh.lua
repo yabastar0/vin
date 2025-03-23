@@ -3,7 +3,7 @@ local io = Kernel.io
 
 local function helpPage()
     io.print("Available commands:")
-    io.print("ls","cd","pwd","mkdir","rm","cp","mv","touch","cat","head","tail","free","ping","wget","help")
+    io.print("ls","cd","pwd","mkdir","rm","cp","mv","touch","cat","head","tail","free","ping","wget","clr","help")
 end
 
 local function shellLoop()
@@ -224,6 +224,8 @@ local function shellLoop()
             local file = stfs.open(stfs.primary, stfs.combine(currentPath,tokens[3]), "w")
             file:write(data)
             file:close()
+        elseif tokens[1] == "clr" or tokens[1] == "clear" then
+            term.clear()
         elseif stfs.exists(stfs.primary, stfs.combine(currentPath,tokens[1])) then
             Kernel.getScript(stfs.combine(currentPath,tokens[1]))()
         else
