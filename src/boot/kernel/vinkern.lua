@@ -5,7 +5,6 @@ _G.KERNELVER    = "vinkern 0.0.b"
 _G.OSVER        = "vinsys 0.0.b"
 
 Kernel          = {}
-Kernel.term     = {}
 Kernel.io       = {}
 
 Kernel.stfs     = "/lib/modules/kernel/drivers/fs/standardfs/stfs.ko"
@@ -50,7 +49,7 @@ local function valifyCursor()
 end
 
 Kernel.panic = error
-_G.error = function(err)
+_ENV.error = function(err)
     if _G.HasGPU then
         gpu.setForeground(0xFF0000)
         Kernel.io.print(err)
@@ -155,14 +154,47 @@ end
 
 Kernel.io.slowWrite = safeCall(Kernel.io.slowWrite)
 
+function Kernel.io.status(t, msg)
+    if t == "ok" then
+        local exForeground = gpu.getForeground()
+        Kernel.io.write("[")
+        gpu.setForeground(0x00CC11)
+        Kernel.io.write(" ok ")
+        gpu.setForeground(exForeground)
+        Kernel.io.write("] ")
+        Kernel.io.print(msg)
+    elseif t == "warn" then
+        local exForeground = gpu.getForeground()
+        Kernel.io.write("[")
+        gpu.setForeground(0xFF7700)
+        Kernel.io.write("warn")
+        gpu.setForeground(exForeground)
+        Kernel.io.write("] ")
+        Kernel.io.print(msg)
+    elseif t == "err" then
+        local exForeground = gpu.getForeground()
+        Kernel.io.write("[")
+        gpu.setForeground(0x9F0000)
+        Kernel.io.write("warn")
+        gpu.setForeground(exForeground)
+        Kernel.io.write("] ")
+        Kernel.io.print(msg)
+    elseif t == "info" then
+        Kernel.io.write("[info] ")
+        Kernel.io.print(msg)
+    end
+end
+
+Kernel.io.status = safeCall(Kernel.io.status)
+
 local function serialize_impl(t, tracking, indent, opts)
     local sType = type(t)
     if sType == "table" then
         if tracking[t] ~= nil then
             if tracking[t] == false then
-                error("Cannot serialize table with repeated entries")
+                Kernel.io.status("err", "Cannot serialize table with repeated entries")
             else
-                error("Cannot serialize table with recursive entries")
+                Kernel.io.status("err", "Cannot serialize table with recursive entries")
             end
         end
         tracking[t] = true
@@ -235,7 +267,7 @@ local function serialize_impl(t, tracking, indent, opts)
     elseif sType == "boolean" or sType == "nil" then
         return tostring(t)
     else
-        error("Cannot serialize type " .. sType)
+        Kernel.io.status("err", "Cannot serialize type " .. sType)
     end
 end
 
@@ -688,6 +720,7 @@ function Kernel.io.read()
                     Kernel.cursor.active = true
                     Kernel.updateCursor()
                 end
+            --[[
             elseif code == 203 then
                 if tPos > 0 then
                     tPos = tPos - 1
@@ -698,6 +731,7 @@ function Kernel.io.read()
                     tPos = tPos + 1
                     Kernel.cursor.pos[1] = Kernel.cursor.pos[1] + 1
                 end
+            ]]
             elseif chr ~= nil and chr >= 32 and chr <= 126 then
                 Kernel.cursor.active = false
                 Kernel.updateCursor()
@@ -740,7 +774,7 @@ if component.filesystem then
     local defaultFS = component.proxy(component.filesystem.address)
     if defaultFS and defaultFS.exists(Kernel.stfs) then
         fsAddress = component.filesystem.address
-        Kernel.io.print("[info] Using default filesystem with " .. Kernel.stfs .. ": " .. fsAddress)
+        Kernel.io.status("info", "Using default filesystem with " .. Kernel.stfs .. ": " .. fsAddress)
     end
 end
 
@@ -748,29 +782,29 @@ function Kernel.getScript(path)
     if not fsAddress then
         for retry = 1, 3 do
             for address in component.list("filesystem") do
-                Kernel.io.print("[chk ] Testing filesystem: " .. address)
+                Kernel.io.status("info", "Testing filesystem: " .. address)
                 local success, fs = pcall(component.proxy, address)
                 if success and fs and fs.exists(path) then
                     fsAddress = address
-                    Kernel.io.print("[info] Found valid filesystem: " .. fsAddress)
+                    Kernel.io.status("ok", "Found valid filesystem: " .. fsAddress)
                     break
                 end
             end
             if fsAddress then break end
-            Kernel.io.print("[warn] No suitable filesystem found, retry " .. retry .. "/3")
+            Kernel.io.status("warn", "No suitable filesystem found, retry " .. retry .. "/3")
             Kernel.sleep(1)
         end
     end
 
     if not fsAddress then
-        error("No filesystem containing " .. path .. " found!")
+        Kernel.io.status("err", "No filesystem containing " .. path .. " found!")
     end
 
     local fsObj
     for _ = 1, 3 do
         fsObj = component.proxy(fsAddress)
         if fsObj then break end
-        Kernel.io.print("[warn] Failed to get filesystem proxy, retrying...")
+        Kernel.io.status("warn", "Failed to get filesystem proxy, retrying...")
         Kernel.sleep(1)
     end
 
@@ -778,11 +812,13 @@ function Kernel.getScript(path)
         Kernel.panic("Critical error: Cannot access filesystem!")
     end
 
-    Kernel.io.print("[load] Loading script:", path)
+    Kernel.io.status("info", "Loading: " .. path)
 
     local fHandle = fsObj.open(path, "r")
     if not fHandle then
-        error("Error: Failed to open " .. path)
+        Kernel.io.status("warn", "Script " .. path .. " is empty or failed to load")
+        local func, _ = load("", "=" .. path, "t", _ENV)
+        return func
     end
 
     local scriptT = {}
@@ -796,12 +832,12 @@ function Kernel.getScript(path)
     fsObj.close(fHandle)
 
     if script == "" then
-        error("Error: Script " .. path .. " is empty or failed to load")
+        Kernel.io.status("warn", "Script " .. path .. " is empty or failed to load")
     end
 
     local func, err = load(script, "=" .. path, "t", _ENV)
     if not func then
-        error("Error loading: " .. err)
+        Kernel.io.status("err", "Error loading: " .. err)
     end
     return func
 end
@@ -814,9 +850,9 @@ for _, path in ipairs(drivers) do
     local oldPath = path
     path = "/lib/modules/kernel/drivers/" .. path
     if stfs.isDirectory(stfs.primary, path) then goto continue end
-    Kernel.io.print("[load] Driver detected:", oldPath)
+    Kernel.io.status("info", "Driver detected:" .. oldPath)
     Kernel.getScript(path)()
-    Kernel.io.print("[info] Driver loaded")
+    Kernel.io.status("ok", "Driver loaded")
     ::continue::
 end
 
