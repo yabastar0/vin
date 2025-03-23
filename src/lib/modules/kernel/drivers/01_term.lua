@@ -24,7 +24,9 @@ if _G.CanDisplay then
     end
 
     function term.clear()
-        term.fill(1, 1, _G.Res[2], _G.Res[1], " ")
+        term.fill(1, 1, _G.Res[1], _G.Res[2], " ")
+        Kernel.cursor.pos[1] = 1
+        Kernel.cursor.pos[2] = 1
     end
 
     function term.clearLine(line)
