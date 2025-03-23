@@ -104,9 +104,8 @@ function stfs.checkDrives()
     return allDrives
 end
 
-
 function stfs.getDrive(drive)
-    return drive and drive.fs or stfs.drive
+    return drive and drive.fs or stfs.primary.fs
 end
 
 function stfs.spaceUsed(drive)
@@ -133,6 +132,7 @@ function stfs.open(drive, path, mode)
         error("[err ] Invalid drive or open function missing")
     end
 
+    path = stfs.resolve(path)
     local handle = fs.open(path, mode)
     if not handle then
         error(string.format("[err ] Failed to open file: %s", path))
@@ -169,11 +169,25 @@ function stfs.open(drive, path, mode)
             end
             fs.close(self.handle)
             self.handle = nil
-        end
+        end,
+
+        readAll = function(self)
+            if not self.handle or not fs.read then
+                error("[err ] Invalid file handle or read function missing")
+            end
+            local dataT = {}
+            while true do
+                local chunk = fs.read(self.handle, 1024)
+                if not chunk then break end
+                table.insert(dataT, chunk)
+            end
+            return table.concat(dataT)
+        end,
     }
 end
 
 function stfs.touch(drive, path)
+    path = stfs.resolve(path)
     local handle = stfs.open(drive, path, "w")
     handle:close()
     return true
@@ -182,6 +196,7 @@ end
 function stfs.mkDir(drive, path)
     local fs = stfs.getDrive(drive)
     if fs and fs.makeDirectory then
+        path = stfs.resolve(path)
         return fs.makeDirectory(path)
     else
         error("[err ] Invalid drive or makeDirectory function missing")
@@ -191,6 +206,7 @@ end
 function stfs.exists(drive, path)
     local fs = stfs.getDrive(drive)
     if fs and fs.exists then
+        path = stfs.resolve(path)
         return fs.exists(path)
     else
         error("[err ] Invalid drive or exists function missing")
@@ -207,12 +223,14 @@ function stfs.isReadOnly(drive)
 end
 
 function stfs.write(drive, path, data)
+    path = stfs.resolve(path)
     local file = stfs.open(drive, path, "w")
     file:write(data)
     file:close()
 end
 
 function stfs.append(drive, path, data)
+    path = stfs.resolve(path)
     local file = stfs.open(drive, path, "a")
     file:write(data)
     file:close()
@@ -221,6 +239,7 @@ end
 function stfs.list(drive, path)
     local fs = stfs.getDrive(drive)
     if fs and fs.list then
+        path = stfs.resolve(path)
         return fs.list(path)
     else
         error("[err ] Invalid drive or list function missing")
@@ -230,6 +249,7 @@ end
 function stfs.lastModified(drive, path)
     local fs = stfs.getDrive(drive)
     if fs and fs.lastModified then
+        path = stfs.resolve(path)
         return fs.lastModified(path)
     else
         error("[err ] Invalid drive or lastModified function missing")
@@ -257,6 +277,7 @@ end
 function stfs.remove(drive, path)
     local fs = stfs.getDrive(drive)
     if fs and fs.remove then
+        path = stfs.resolve(path)
         return fs.remove(path)
     else
         error("[err ] Invalid drive or remove function missing")
@@ -266,6 +287,7 @@ end
 function stfs.size(drive, path)
     local fs = stfs.getDrive(drive)
     if fs and fs.size then
+        path = stfs.resolve(path)
         return fs.size(path)
     else
         error("[err ] Invalid drive or size function missing")
@@ -273,6 +295,7 @@ function stfs.size(drive, path)
 end
 
 function stfs.read(drive, path, count)
+    path = stfs.resolve(path)
     local file = stfs.open(drive, path, "r")
     local data = file:read(count)
     file:close()
@@ -282,6 +305,8 @@ end
 function stfs.rename(drive, oldPath, newPath)
     local fs = stfs.getDrive(drive)
     if fs and fs.rename then
+        oldPath = stfs.resolve(oldPath)
+        newPath = stfs.resolve(newPath)
         return fs.rename(oldPath, newPath)
     else
         error("[err ] Invalid drive or rename function missing")
@@ -291,8 +316,29 @@ end
 function stfs.isDirectory(drive, path)
     local fs = stfs.getDrive(drive)
     if fs and fs.isDirectory then
+        path = stfs.resolve(path)
         return fs.isDirectory(path)
     else
         error("[err ] Invalid drive or isDirectory function missing")
     end
+end
+
+function stfs.resolve(path)
+    local parts = {}
+    for part in string.gmatch(path, "[^/]+") do
+        if part == ".." then
+            table.remove(parts)
+        elseif part ~= "." then
+            table.insert(parts, part)
+        end
+    end
+    return table.concat(parts, "/")
+end
+
+function stfs.combine(path1, path2)
+    path1 = stfs.resolve(path1)
+    path2 = stfs.resolve(path2)
+    if path1 == "" then return path2 end
+    if path2 == "" then return path1 end
+    return path1 .. "/" .. path2
 end
