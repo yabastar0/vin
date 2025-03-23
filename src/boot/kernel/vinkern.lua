@@ -19,10 +19,12 @@ local screen    = component.list("screen")()
 
 if gpu then HasGPU = true end
 if screen then HasScreen = true end
-if gpu and screen then gpu.bind(screen); CanDisplay = true end
+if gpu and screen then
+    gpu.bind(screen); CanDisplay = true
+end
 
 local w, h = gpu.getResolution()
-_G.Res = {w, h}
+_G.Res = { w, h }
 
 Kernel.cursor = {
     ["pos"] = { 1, 1 },
@@ -47,11 +49,8 @@ local function valifyCursor()
     Kernel.cursor.pos[2] = Kernel.cursor.pos[2] or 1
 end
 
-local runlevel
-local old_shutdown = computer.shutdown
-
 Kernel.panic = error
-error = function(err)
+_G.error = function(err)
     if _G.HasGPU then
         gpu.setForeground(0xFF0000)
         Kernel.io.print(err)
@@ -92,8 +91,6 @@ local function safeCall(func)
     end
 end
 
-function computer.runlevel() return runlevel end
-
 function Kernel.busySleep(seconds)
     local target = computer.uptime() + seconds
     while computer.uptime() < target do end
@@ -104,21 +101,6 @@ function Kernel.sleep(seconds)
     while computer.uptime() < target do computer.pullSignal(0) end
 end
 
-function computer.shutdown(reboot)
-    if reboot then
-        runlevel = 6
-    else
-        runlevel = 0
-    end
-    computer.pushSignal("shutdown")
-    Kernel.sleep(0.1)
-    old_shutdown(reboot)
-end
-
-computer.shutdown = safeCall(computer.shutdown)
-
-
-
 function Kernel.io.print(...)
     local msg = table.concat({ ... }, " ")
     msg = tostring(msg)
@@ -126,7 +108,7 @@ function Kernel.io.print(...)
 
     for line in string.gmatch(msg, "([^\n]*)\n?") do
         if _G.CanDisplay then
-            gpu.set(position[1], position[2], line)
+            gpu.set(position[1], position[2], tostring(line))
 
             if position[2] == _G.Res[2] then
                 gpu.copy(1, 2, _G.Res[1], _G.Res[2] - 1, 0, -1)
@@ -443,7 +425,7 @@ setmetatable(Kernel.keyboard.keys, {
 
 function Kernel.keyboard.isAltDown()
     return Kernel.keyboard.pressedCodes[Kernel.keyboard.keys.lmenu] or
-    Kernel.keyboard.pressedCodes[Kernel.keyboard.keys.rmenu]
+        Kernel.keyboard.pressedCodes[Kernel.keyboard.keys.rmenu]
 end
 
 function Kernel.keyboard.isControl(char)
@@ -452,7 +434,7 @@ end
 
 function Kernel.keyboard.isControlDown()
     return Kernel.keyboard.pressedCodes[Kernel.keyboard.keys.lcontrol] or
-    Kernel.keyboard.pressedCodes[Kernel.keyboard.keys.rcontrol]
+        Kernel.keyboard.pressedCodes[Kernel.keyboard.keys.rcontrol]
 end
 
 function Kernel.keyboard.isKeyDown(charOrCode)
@@ -465,7 +447,47 @@ end
 
 function Kernel.keyboard.isShiftDown()
     return Kernel.keyboard.pressedCodes[Kernel.keyboard.keys.lshift] or
-    Kernel.keyboard.pressedCodes[Kernel.keyboard.keys.rshift]
+        Kernel.keyboard.pressedCodes[Kernel.keyboard.keys.rshift]
+end
+
+Kernel.keyboard.getShiftedChar = function(chr, capsLockActive)
+    local shiftMap = {
+        [49] = '!',
+        [50] = '@',
+        [51] = '#',
+        [52] = '$',
+        [53] = '%',
+        [54] = '^',
+        [55] = '&',
+        [56] = '*',
+        [57] = '(',
+        [48] = ')',
+        [45] = '_',
+        [61] = '+',
+        [91] = '{',
+        [93] = '}',
+        [92] = '|',
+        [59] = ':',
+        [39] = '"',
+        [44] = '<',
+        [46] = '>',
+        [47] = '?',
+        [96] = '~'
+    }
+
+    if chr >= 97 and chr <= 122 then
+        if capsLockActive then
+            return string.char(chr - 32)
+        else
+            return string.char(chr)
+        end
+    end
+
+    if shiftMap[chr] then
+        return shiftMap[chr]
+    end
+
+    return string.char(chr)
 end
 
 Kernel.SignalSystem = {}
@@ -628,24 +650,87 @@ end
 function Kernel.io.read()
     Kernel.cursor.active = true
     local fullText = ""
+    local tPos = 0
+    local shiftActive = false
+    local capsLockActive = false
+
     while true do
-        local evt, _, chr, _ = computer.pullSignal(0.5)
-        if evt == "key_down" and chr then
-            if chr == 13 then break end
+        local evt, _, chr, code = computer.pullSignal(0.5)
+        if evt == "key_down" then
+            if code == 42 or code == 54 then
+                shiftActive = true
+            end
+
+            if code == 58 then
+                capsLockActive = not capsLockActive
+            end
+
+            if chr == 13 then
+                break
+            end
+
             if chr == 8 then
-                fullText = string.sub(fullText, 1, -2)
-                if _G.CanDisplay then
-                    gpu.set(Kernel.cursor.pos[1], Kernel.cursor.pos[2], " ")
+                if tPos > 0 then
+                    Kernel.cursor.active = false
+                    Kernel.updateCursor()
+
+                    fullText = string.sub(fullText, 1, tPos - 1) .. string.sub(fullText, tPos + 1)
+                    tPos = tPos - 1
+                    Kernel.cursor.pos[1] = Kernel.cursor.pos[1] - 1
+
+                    if _G.CanDisplay then
+                        gpu.set(Kernel.cursor.pos[1], Kernel.cursor.pos[2], " ")
+
+                        local remainingText = string.sub(fullText, tPos + 1)
+                        gpu.set(Kernel.cursor.pos[1] + 1, Kernel.cursor.pos[2], remainingText)
+                    end
+
+                    Kernel.cursor.active = true
+                    Kernel.updateCursor()
                 end
-                Kernel.cursor.pos[1] = Kernel.cursor.pos[1] - 1
-            else
-                fullText = fullText .. string.char(chr)
-                Kernel.io.writeChar(string.char(chr))
+            elseif code == 203 then
+                if tPos > 0 then
+                    tPos = tPos - 1
+                    Kernel.cursor.pos[1] = Kernel.cursor.pos[1] - 1
+                end
+            elseif code == 205 then
+                if tPos < #fullText then
+                    tPos = tPos + 1
+                    Kernel.cursor.pos[1] = Kernel.cursor.pos[1] + 1
+                end
+            elseif chr ~= nil and chr >= 32 and chr <= 126 then
+                Kernel.cursor.active = false
+                Kernel.updateCursor()
+
+                local char
+                if shiftActive or capsLockActive then
+                    char = Kernel.keyboard.getShiftedChar(chr, capsLockActive)
+                else
+                    char = string.char(chr)
+                end
+
+                fullText = string.sub(fullText, 1, tPos) .. char .. string.sub(fullText, tPos + 1)
+                tPos = tPos + 1
+
+                if _G.CanDisplay then
+                    gpu.set(Kernel.cursor.pos[1], Kernel.cursor.pos[2], char)
+                end
+                Kernel.cursor.pos[1] = Kernel.cursor.pos[1] + 1
+
+                Kernel.cursor.active = true
+                Kernel.updateCursor()
+            end
+        elseif evt == "key_up" then
+            if code == 42 or code == 54 then
+                shiftActive = false
             end
         end
+
         Kernel.updateCursor()
     end
+
     Kernel.cursor.active = false
+    Kernel.updateCursor()
     return fullText
 end
 
@@ -700,12 +785,13 @@ function Kernel.getScript(path)
         error("Error: Failed to open " .. path)
     end
 
-    local script = ""
+    local scriptT = {}
     while true do
         local chunk = fsObj.read(fHandle, 1024)
         if not chunk then break end
-        script = script .. chunk
+        table.insert(scriptT, chunk)
     end
+    local script = table.concat(scriptT)
 
     fsObj.close(fHandle)
 
@@ -724,12 +810,14 @@ Kernel.getScript(Kernel.stfs)()
 
 local drivers = stfs.list(stfs.primary, "/lib/modules/kernel/drivers/")
 
-for _,path in ipairs(drivers) do
+for _, path in ipairs(drivers) do
     local oldPath = path
     path = "/lib/modules/kernel/drivers/" .. path
     if stfs.isDirectory(stfs.primary, path) then goto continue end
-    Kernel.io.print("[load] Driver detected:",oldPath)
+    Kernel.io.print("[load] Driver detected:", oldPath)
     Kernel.getScript(path)()
-    Kernel.io.print("[info] Finished")
+    Kernel.io.print("[info] Driver loaded")
     ::continue::
 end
+
+Kernel.getScript("/lib/vininit/vininit.lua")()
