@@ -139,14 +139,13 @@ local function shellLoop()
                     end
                 end
 
+                term.setTextColor(0x0F2FFF)
                 for _, dir in ipairs(directories) do
-                    term.setTextColor(0x0F2FFF)
                     io.print(dir)
-                    term.setTextColor(0xFFFFFF)
                 end
+                term.setTextColor(0xFFFFFF)
 
                 for _, file in ipairs(files) do io.print(file) end
-                term.setTextColor(0xFFFFFF)
             elseif tokens[1] == "cd" then
                 local newPath = tokens[2] or "/"
                 local drive = getDrive()
