@@ -1,47 +1,41 @@
 local component = component or require("component")
-local computer  = computer or require("computer")
+local computer = computer or require("computer")
 
-_G.KERNELVER    = "vinkern 0.0.b"
-_G.OSVER        = "vinsys 0.0.b"
+_G.KERNELVER = "vinkern 0.0.r"
+_G.OSVER = "vinsys 0.0.r"
 
-Kernel          = {}
-Kernel.io       = {}
+Kernel = {}
+Kernel.io = {}
 
-Kernel.stfs     = "/lib/modules/kernel/drivers/fs/standardfs/stfs.ko"
+Kernel.stfs = "/lib/modules/kernel/drivers/fs/standardfs/stfs.ko"
 
-_G.HasGPU       = false
-_G.HasScreen    = false
-_G.Res          = {}
+_G.HasGPU = false
+_G.HasScreen = false
+_G.Res = {}
 
-local gpu       = component.proxy(component.list("gpu")())
-local screen    = component.list("screen")()
+local gpu = component.proxy(component.list("gpu")())
+local screen = component.list("screen")()
 
 if gpu then HasGPU = true end
 if screen then HasScreen = true end
 if gpu and screen then
-    gpu.bind(screen); CanDisplay = true
+    gpu.bind(screen);
+    CanDisplay = true
 end
 
 local w, h = gpu.getResolution()
-_G.Res = { w, h }
+_G.Res = {w, h}
 
-Kernel.cursor = {
-    ["pos"] = { 1, 1 },
-    ["visible"] = false,
-    ["active"] = true
-}
+Kernel.cursor = {["pos"] = {1, 1}, ["visible"] = false, ["active"] = true}
 
 function Kernel.setCursorPos(x, y)
-    Kernel.cursor.pos[1] = x; Kernel.cursor.pos[2] = y
+    Kernel.cursor.pos[1] = x;
+    Kernel.cursor.pos[2] = y
 end
 
-function Kernel.getCursorPos()
-    return Kernel.cursor.pos
-end
+function Kernel.getCursorPos() return Kernel.cursor.pos end
 
-function Kernel.setCursor(val)
-    Kernel.cursor.active = val
-end
+function Kernel.setCursor(val) Kernel.cursor.active = val end
 
 local function valifyCursor()
     Kernel.cursor.pos[1] = Kernel.cursor.pos[1] or 1
@@ -83,9 +77,7 @@ end
 local function safeCall(func)
     return function(...)
         local success, result = pcall(func, ...)
-        if not success then
-            safeError(result)
-        end
+        if not success then safeError(result) end
         return result
     end
 end
@@ -101,7 +93,7 @@ function Kernel.sleep(seconds)
 end
 
 function Kernel.io.print(...)
-    local msg = table.concat({ ... }, " ")
+    local msg = table.concat({...}, " ")
     msg = tostring(msg)
     local position = Kernel.cursor.pos
 
@@ -192,10 +184,13 @@ local function serialize_impl(t, tracking, indent, opts)
     if sType == "table" then
         if tracking[t] ~= nil then
             if tracking[t] == false then
-                Kernel.io.status("err", "Cannot serialize table with repeated entries")
+                Kernel.io.status("err",
+                                 "Cannot serialize table with repeated entries")
             else
-                Kernel.io.status("err", "Cannot serialize table with recursive entries")
+                Kernel.io.status("err",
+                                 "Cannot serialize table with recursive entries")
             end
+            return "{}"
         end
         tracking[t] = true
 
@@ -204,53 +199,83 @@ local function serialize_impl(t, tracking, indent, opts)
             result = "{}"
         else
             local open, sub_indent, open_key, close_key, equal, comma = "{\n",
-                indent ..
-                "  ",
-                "[ ",
-                " ] = ",
-                " = ",
-                ",\n"
+                                                                        indent ..
+                                                                            "  ",
+                                                                        "[ ",
+                                                                        " ] = ",
+                                                                        " = ",
+                                                                        ",\n"
             if opts.compact then
                 open, sub_indent, open_key, close_key, equal, comma = "{", "",
-                    "[", "]=",
-                    "=", ","
+                                                                      "[", "]=",
+                                                                      "=", ","
             end
 
             result = open
-            local seen_keys = {}
+            local is_array = true
+            local max_index = 0
 
-            for _, v in ipairs(t) do
-                result = result .. sub_indent ..
-                    serialize_impl(v, tracking, sub_indent, opts) ..
-                    comma
+            for k in pairs(t) do
+                if type(k) ~= "number" or k < 1 or math.floor(k) ~= k then
+                    is_array = false
+                    break
+                end
+                if k > max_index then max_index = k end
             end
 
-            for k, v in pairs(t) do
-                if not seen_keys[k] then
-                    local sEntry
-                    if type(k) == "string" and
-                        string.match(k, "^[%a_][%a%d_]*$") then
-                        sEntry = k .. equal ..
-                            serialize_impl(v, tracking, sub_indent,
-                                opts) .. comma
-                    else
-                        sEntry = open_key ..
-                            serialize_impl(k, tracking, sub_indent,
-                                opts) .. close_key ..
-                            serialize_impl(v, tracking, sub_indent,
-                                opts) .. comma
+            if is_array then
+                for i = 1, max_index do
+                    result = result .. sub_indent ..
+                                 serialize_impl(t[i], tracking, sub_indent, opts)
+                    if i < max_index then
+                        result = result .. comma
                     end
-                    result = result .. sub_indent .. sEntry
+                end
+            else
+                local first = true
+
+                local array_part = {}
+                for k, v in pairs(t) do
+                    if type(k) == "number" and k >= 1 and math.floor(k) == k then
+                        array_part[k] = true
+                        if not first then
+                            result = result .. comma
+                        end
+                        first = false
+                        result = result .. sub_indent ..
+                                     serialize_impl(v, tracking, sub_indent,
+                                                    opts)
+                    end
+                end
+
+                for k, v in pairs(t) do
+                    if not array_part[k] then
+                        if not first then
+                            result = result .. comma
+                        end
+                        first = false
+
+                        local sEntry
+                        if type(k) == "string" and
+                            string.match(k, "^[%a_][%a%d_]*$") then
+                            sEntry = k .. equal ..
+                                         serialize_impl(v, tracking, sub_indent,
+                                                        opts)
+                        else
+                            sEntry = open_key ..
+                                         serialize_impl(k, tracking, sub_indent,
+                                                        opts) .. close_key ..
+                                         serialize_impl(v, tracking, sub_indent,
+                                                        opts)
+                        end
+                        result = result .. sub_indent .. sEntry
+                    end
                 end
             end
             result = result .. indent .. "}"
         end
 
-        if opts.allow_repetitions then
-            tracking[t] = nil
-        else
-            tracking[t] = false
-        end
+        tracking[t] = opts.allow_repetitions and nil or false
         return result
     elseif sType == "string" then
         return string.format("%q", t)
@@ -268,6 +293,7 @@ local function serialize_impl(t, tracking, indent, opts)
         return tostring(t)
     else
         Kernel.io.status("err", "Cannot serialize type " .. sType)
+        return "nil"
     end
 end
 
@@ -294,9 +320,7 @@ function Kernel.deserialize(str)
 end
 
 function Kernel.inTable(value, tbl)
-    for _, v in ipairs(tbl) do
-        if v == value then return true end
-    end
+    for _, v in ipairs(tbl) do if v == value then return true end end
     return false
 end
 
@@ -308,7 +332,8 @@ function Kernel.updateCursor()
     local position = Kernel.cursor.pos
     if isActive then
         if not isVisible then
-            savedChar, savedForeground, savedBackground = gpu.get(position[1], position[2])
+            savedChar, savedForeground, savedBackground =
+                gpu.get(position[1], position[2])
             if _G.CanDisplay then
                 gpu.setForeground(savedBackground)
                 gpu.setBackground(savedForeground)
@@ -329,7 +354,9 @@ function Kernel.updateCursor()
     else
         if isVisible then
             if _G.CanDisplay then
-                savedChar, savedForeground, savedBackground = gpu.get(position[1], position[2])
+                savedChar, savedForeground, savedBackground = gpu.get(
+                                                                  position[1],
+                                                                  position[2])
                 gpu.setForeground(savedBackground)
                 gpu.setBackground(savedForeground)
                 gpu.set(position[1], position[2], savedChar)
@@ -340,7 +367,6 @@ function Kernel.updateCursor()
 end
 
 Kernel.updateCursor = safeCall(Kernel.updateCursor)
-
 
 local interAddr = component.list("internet")()
 Kernel.hasInternet = false
@@ -356,9 +382,7 @@ function Kernel.http(request)
     local url = request[2]
     local postData = request[3]
 
-    if not url or type(url) ~= "string" then
-        return
-    end
+    if not url or type(url) ~= "string" then return end
 
     if rType == "get" then
         local handle = internet.request(url)
@@ -400,78 +424,70 @@ end
 
 Kernel.http = safeCall(Kernel.http)
 
-Kernel.keyboard = {
-    pressedChars = {},
-    pressedCodes = {},
-    keys = {}
-}
+Kernel.keyboard = {pressedChars = {}, pressedCodes = {}, keys = {}}
 
 local keyList = {
-    { "c",    0x2E }, { "d", 0x20 }, { "q", 0x10 }, { "w", 0x11 },
-    { "back", 0x0E }, { "delete", 0xD3 }, { "down", 0xD0 }, { "enter", 0x1C },
-    { "home",   0xC7 }, { "lcontrol", 0x1D }, { "left", 0xCB }, { "lmenu", 0x38 },
-    { "lshift", 0x2A }, { "pageDown", 0xD1 }, { "rcontrol", 0x9D }, { "right", 0xCD },
-    { "rmenu", 0xB8 }, { "rshift", 0x36 }, { "space", 0x39 }, { "tab", 0x0F },
-    { "up",    0xC8 }, { "end", 0xCF }, { "numpadenter", 0x9C }
+    {"c", 0x2E}, {"d", 0x20}, {"q", 0x10}, {"w", 0x11}, {"back", 0x0E},
+    {"delete", 0xD3}, {"down", 0xD0}, {"enter", 0x1C}, {"home", 0xC7},
+    {"lcontrol", 0x1D}, {"left", 0xCB}, {"lmenu", 0x38}, {"lshift", 0x2A},
+    {"pageDown", 0xD1}, {"rcontrol", 0x9D}, {"right", 0xCD}, {"rmenu", 0xB8},
+    {"rshift", 0x36}, {"space", 0x39}, {"tab", 0x0F}, {"up", 0xC8},
+    {"end", 0xCF}, {"numpadenter", 0x9C}
 }
 
-for i = 1, 9 do table.insert(keyList, { tostring(i), 0x01 + i }) end
-for i, char in ipairs({ "a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", "n", "o", "p", "q", "r", "s", "t", "u", "v", "w", "x", "y", "z" }) do
-    table.insert(keyList, { char, 0x1D + i })
-end
+for i = 1, 9 do table.insert(keyList, {tostring(i), 0x01 + i}) end
+for i, char in ipairs({
+    "a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", "n", "o",
+    "p", "q", "r", "s", "t", "u", "v", "w", "x", "y", "z"
+}) do table.insert(keyList, {char, 0x1D + i}) end
 
 for _, key in ipairs({
-    { "apostrophe", 0x28 }, { "at", 0x91 }, { "backslash", 0x2B }, { "capital", 0x3A },
-    { "comma",      0x33 }, { "equals", 0x0D }, { "grave", 0x29 }, { "lbracket", 0x1A },
-    { "minus",    0x0C }, { "numlock", 0x45 }, { "pause", 0xC5 }, { "period", 0x34 },
-    { "rbracket", 0x1B }, { "scroll", 0x46 }, { "semicolon", 0x27 }, { "slash", 0x35 },
-    { "stop",   0x95 }, { "underline", 0x93 },
-    { "pageUp", 0xC9 }, { "pageDown", 0xD1 }, { "insert", 0xD2 }, { "delete", 0xD3 },
-    { "f1", 0x3B }, { "f2", 0x3C }, { "f3", 0x3D }, { "f4", 0x3E },
-    { "f5", 0x3F }, { "f6", 0x40 }, { "f7", 0x41 }, { "f8", 0x42 },
-    { "f9",      0x43 }, { "f10", 0x44 }, { "f11", 0x57 }, { "f12", 0x58 },
-    { "numpad0", 0x52 }, { "numpad1", 0x4F }, { "numpad2", 0x50 },
-    { "numpad3", 0x51 }, { "numpad4", 0x4B }, { "numpad5", 0x4C },
-    { "numpad6", 0x4D }, { "numpad7", 0x47 }, { "numpad8", 0x48 },
-    { "numpad9",   0x49 }, { "numpadmul", 0x37 }, { "numpaddiv", 0xB5 },
-    { "numpadsub", 0x4A }, { "numpadadd", 0x4E }, { "numpaddecimal", 0x53 },
-    { "numpadcomma", 0xB3 }, { "numpadequals", 0x8D }
-}) do
-    table.insert(keyList, key)
-end
+    {"apostrophe", 0x28}, {"at", 0x91}, {"backslash", 0x2B}, {"capital", 0x3A},
+    {"comma", 0x33}, {"equals", 0x0D}, {"grave", 0x29}, {"lbracket", 0x1A},
+    {"minus", 0x0C}, {"numlock", 0x45}, {"pause", 0xC5}, {"period", 0x34},
+    {"rbracket", 0x1B}, {"scroll", 0x46}, {"semicolon", 0x27}, {"slash", 0x35},
+    {"stop", 0x95}, {"underline", 0x93}, {"pageUp", 0xC9}, {"pageDown", 0xD1},
+    {"insert", 0xD2}, {"delete", 0xD3}, {"f1", 0x3B}, {"f2", 0x3C},
+    {"f3", 0x3D}, {"f4", 0x3E}, {"f5", 0x3F}, {"f6", 0x40}, {"f7", 0x41},
+    {"f8", 0x42}, {"f9", 0x43}, {"f10", 0x44}, {"f11", 0x57}, {"f12", 0x58},
+    {"numpad0", 0x52}, {"numpad1", 0x4F}, {"numpad2", 0x50}, {"numpad3", 0x51},
+    {"numpad4", 0x4B}, {"numpad5", 0x4C}, {"numpad6", 0x4D}, {"numpad7", 0x47},
+    {"numpad8", 0x48}, {"numpad9", 0x49}, {"numpadmul", 0x37},
+    {"numpaddiv", 0xB5}, {"numpadsub", 0x4A}, {"numpadadd", 0x4E},
+    {"numpaddecimal", 0x53}, {"numpadcomma", 0xB3}, {"numpadequals", 0x8D}
+}) do table.insert(keyList, key) end
 
-for _, key in ipairs(keyList) do
-    Kernel.keyboard.keys[key[1]] = key[2]
-end
+for _, key in ipairs(keyList) do Kernel.keyboard.keys[key[1]] = key[2] end
 
 setmetatable(Kernel.keyboard.keys, {
     __index = function(tbl, k)
         if type(k) ~= "number" then return end
         for name, value in pairs(tbl) do
-            if value == k then
-                return name
-            end
+            if value == k then return name end
         end
     end
 })
 
 function Kernel.keyboard.isAltDown()
     return Kernel.keyboard.pressedCodes[Kernel.keyboard.keys.lmenu] or
-        Kernel.keyboard.pressedCodes[Kernel.keyboard.keys.rmenu]
+               Kernel.keyboard.pressedCodes[Kernel.keyboard.keys.rmenu]
 end
 
 function Kernel.keyboard.isControl(char)
-    return type(char) == "number" and (char < 0x20 or (char >= 0x7F and char <= 0x9F))
+    return type(char) == "number" and
+               (char < 0x20 or (char >= 0x7F and char <= 0x9F))
 end
 
 function Kernel.keyboard.isControlDown()
     return Kernel.keyboard.pressedCodes[Kernel.keyboard.keys.lcontrol] or
-        Kernel.keyboard.pressedCodes[Kernel.keyboard.keys.rcontrol]
+               Kernel.keyboard.pressedCodes[Kernel.keyboard.keys.rcontrol]
 end
 
 function Kernel.keyboard.isKeyDown(charOrCode)
     if type(charOrCode) == "string" then
-        return Kernel.keyboard.pressedChars[utf8 and utf8.codepoint(charOrCode) or charOrCode:byte()]
+        return
+            Kernel.keyboard.pressedChars[utf8 and utf8.codepoint(charOrCode) or
+                charOrCode:byte()]
     elseif type(charOrCode) == "number" then
         return Kernel.keyboard.pressedCodes[charOrCode]
     end
@@ -479,7 +495,7 @@ end
 
 function Kernel.keyboard.isShiftDown()
     return Kernel.keyboard.pressedCodes[Kernel.keyboard.keys.lshift] or
-        Kernel.keyboard.pressedCodes[Kernel.keyboard.keys.rshift]
+               Kernel.keyboard.pressedCodes[Kernel.keyboard.keys.rshift]
 end
 
 Kernel.keyboard.getShiftedChar = function(chr, capsLockActive)
@@ -515,9 +531,7 @@ Kernel.keyboard.getShiftedChar = function(chr, capsLockActive)
         end
     end
 
-    if shiftMap[chr] then
-        return shiftMap[chr]
-    end
+    if shiftMap[chr] then return shiftMap[chr] end
 
     return string.char(chr)
 end
@@ -530,7 +544,8 @@ local lastInterrupt = -math.huge
 Kernel.SignalSystem.handlers = handlers
 
 local function checkInterrupt(uptime)
-    if uptime - lastInterrupt > 1 and Kernel.keyboard.isControlDown() and Kernel.keyboard.isKeyDown(Kernel.keyboard.keys.c) then
+    if uptime - lastInterrupt > 1 and Kernel.keyboard.isControlDown() and
+        Kernel.keyboard.isKeyDown(Kernel.keyboard.keys.c) then
         lastInterrupt = uptime
         if Kernel.keyboard.isAltDown() then
             require("process").info().data.signal("interrupted", 0)
@@ -541,7 +556,8 @@ local function checkInterrupt(uptime)
     return false, nil
 end
 
-function Kernel.SignalSystem.register(key, callback, interval, times, opt_handlers)
+function Kernel.SignalSystem.register(key, callback, interval, times,
+                                      opt_handlers)
     if type(callback) ~= "function" then error("Callback must be a function") end
     local t_interval = interval or math.huge
     local t_times = times or 1
@@ -551,7 +567,7 @@ function Kernel.SignalSystem.register(key, callback, interval, times, opt_handle
         times = t_times,
         callback = callback,
         interval = t_interval,
-        timeout = currentUptime + t_interval,
+        timeout = currentUptime + t_interval
     }
     opt_handlers = opt_handlers or handlers
 
@@ -564,7 +580,7 @@ end
 Kernel.SignalSystem.register = safeCall(Kernel.SignalSystem.register)
 
 local _pullSignal = computer.pullSignal
-setmetatable(handlers, { __call = function(_, ...) return _pullSignal(...) end })
+setmetatable(handlers, {__call = function(_, ...) return _pullSignal(...) end})
 
 computer.pullSignal = function(seconds)
     seconds = seconds or math.huge
@@ -591,18 +607,18 @@ computer.pullSignal = function(seconds)
         local signal = event_data[1]
 
         local handlersCopy = {}
-        for id, handler in pairs(handlers) do
-            handlersCopy[id] = handler
-        end
+        for id, handler in pairs(handlers) do handlersCopy[id] = handler end
 
         for id, handler in pairs(handlersCopy) do
-            if (handler.key == nil or handler.key == signal) or uptime() >= handler.timeout then
+            if (handler.key == nil or handler.key == signal) or uptime() >=
+                handler.timeout then
                 handler.times = handler.times - 1
                 handler.timeout = handler.timeout + handler.interval
                 if handler.times <= 0 and handlers[id] == handler then
                     handlers[id] = nil
                 end
-                local result, message = pcall(handler.callback, table.unpack(event_data, 1, event_data.n))
+                local result, message = pcall(handler.callback, table.unpack(
+                                                  event_data, 1, event_data.n))
                 if not result then
                     pcall(Kernel.SignalSystem.onError, message)
                 elseif message == false and handlers[id] == handler then
@@ -611,9 +627,7 @@ computer.pullSignal = function(seconds)
             end
         end
 
-        if signal then
-            return table.unpack(event_data, 1, event_data.n)
-        end
+        if signal then return table.unpack(event_data, 1, event_data.n) end
     until uptime() >= deadline
 end
 
@@ -622,9 +636,13 @@ local function createPlainFilter(name, ...)
     if name == nil and filter.n == 0 then return nil end
     return function(...)
         local signal = table.pack(...)
-        if name and not (type(signal[1]) == "string" and signal[1]:match(name)) then return false end
+        if name and not (type(signal[1]) == "string" and signal[1]:match(name)) then
+            return false
+        end
         for i = 1, filter.n do
-            if filter[i] ~= nil and filter[i] ~= signal[i + 1] then return false end
+            if filter[i] ~= nil and filter[i] ~= signal[i + 1] then
+                return false
+            end
         end
         return true
     end
@@ -649,8 +667,11 @@ function Kernel.SignalSystem.pull(...)
         return Kernel.SignalSystem.pullFiltered(createPlainFilter(...))
     else
         local seconds = args[1]
-        if seconds ~= nil and type(seconds) ~= "number" then error("First argument must be a number or nil") end
-        return Kernel.SignalSystem.pullFiltered(seconds, createPlainFilter(select(2, ...)))
+        if seconds ~= nil and type(seconds) ~= "number" then
+            error("First argument must be a number or nil")
+        end
+        return Kernel.SignalSystem.pullFiltered(seconds, createPlainFilter(
+                                                    select(2, ...)))
     end
 end
 
@@ -664,8 +685,12 @@ function Kernel.SignalSystem.pullFiltered(...)
     else
         seconds = args[1]
         filter = args[2]
-        if seconds ~= nil and type(seconds) ~= "number" then error("First argument must be a number or nil") end
-        if filter ~= nil and type(filter) ~= "function" then error("Second argument must be a function or nil") end
+        if seconds ~= nil and type(seconds) ~= "number" then
+            error("First argument must be a number or nil")
+        end
+        if filter ~= nil and type(filter) ~= "function" then
+            error("Second argument must be a function or nil")
+        end
     end
 
     local deadline = computer.uptime() + seconds
@@ -673,7 +698,8 @@ function Kernel.SignalSystem.pullFiltered(...)
         local waitTime = deadline - computer.uptime()
         if waitTime <= 0 then break end
         local signal = table.pack(computer.pullSignal(waitTime))
-        if signal.n > 0 and (not filter or filter(table.unpack(signal, 1, signal.n))) then
+        if signal.n > 0 and
+            (not filter or filter(table.unpack(signal, 1, signal.n))) then
             return table.unpack(signal, 1, signal.n)
         end
     until false
@@ -689,24 +715,19 @@ function Kernel.io.read()
     while true do
         local evt, _, chr, code = computer.pullSignal(0.5)
         if evt == "key_down" then
-            if code == 42 or code == 54 then
-                shiftActive = true
-            end
+            if code == 42 or code == 54 then shiftActive = true end
 
-            if code == 58 then
-                capsLockActive = not capsLockActive
-            end
+            if code == 58 then capsLockActive = not capsLockActive end
 
-            if chr == 13 then
-                break
-            end
+            if chr == 13 then break end
 
             if chr == 8 then
                 if tPos > 0 then
                     Kernel.cursor.active = false
                     Kernel.updateCursor()
 
-                    fullText = string.sub(fullText, 1, tPos - 1) .. string.sub(fullText, tPos + 1)
+                    fullText = string.sub(fullText, 1, tPos - 1) ..
+                                   string.sub(fullText, tPos + 1)
                     tPos = tPos - 1
                     Kernel.cursor.pos[1] = Kernel.cursor.pos[1] - 1
 
@@ -714,13 +735,14 @@ function Kernel.io.read()
                         gpu.set(Kernel.cursor.pos[1], Kernel.cursor.pos[2], " ")
 
                         local remainingText = string.sub(fullText, tPos + 1)
-                        gpu.set(Kernel.cursor.pos[1] + 1, Kernel.cursor.pos[2], remainingText)
+                        gpu.set(Kernel.cursor.pos[1] + 1, Kernel.cursor.pos[2],
+                                remainingText)
                     end
 
                     Kernel.cursor.active = true
                     Kernel.updateCursor()
                 end
-            --[[
+                --[[
             elseif code == 203 then
                 if tPos > 0 then
                     tPos = tPos - 1
@@ -743,7 +765,8 @@ function Kernel.io.read()
                     char = string.char(chr)
                 end
 
-                fullText = string.sub(fullText, 1, tPos) .. char .. string.sub(fullText, tPos + 1)
+                fullText = string.sub(fullText, 1, tPos) .. char ..
+                               string.sub(fullText, tPos + 1)
                 tPos = tPos + 1
 
                 if _G.CanDisplay then
@@ -755,9 +778,7 @@ function Kernel.io.read()
                 Kernel.updateCursor()
             end
         elseif evt == "key_up" then
-            if code == 42 or code == 54 then
-                shiftActive = false
-            end
+            if code == 42 or code == 54 then shiftActive = false end
         end
 
         Kernel.updateCursor()
@@ -774,7 +795,9 @@ if component.filesystem then
     local defaultFS = component.proxy(component.filesystem.address)
     if defaultFS and defaultFS.exists(Kernel.stfs) then
         fsAddress = component.filesystem.address
-        Kernel.io.status("info", "Using default filesystem with " .. Kernel.stfs .. ": " .. fsAddress)
+        Kernel.io.status("info",
+                         "Using default filesystem with " .. Kernel.stfs .. ": " ..
+                             fsAddress)
     end
 end
 
@@ -786,18 +809,21 @@ function Kernel.getScript(path)
                 local success, fs = pcall(component.proxy, address)
                 if success and fs and fs.exists(path) then
                     fsAddress = address
-                    Kernel.io.status("ok", "Found valid filesystem: " .. fsAddress)
+                    Kernel.io.status("ok",
+                                     "Found valid filesystem: " .. fsAddress)
                     break
                 end
             end
             if fsAddress then break end
-            Kernel.io.status("warn", "No suitable filesystem found, retry " .. retry .. "/3")
+            Kernel.io.status("warn", "No suitable filesystem found, retry " ..
+                                 retry .. "/3")
             Kernel.sleep(1)
         end
     end
 
     if not fsAddress then
-        Kernel.io.status("err", "No filesystem containing " .. path .. " found!")
+        Kernel.io
+            .status("err", "No filesystem containing " .. path .. " found!")
     end
 
     local fsObj
@@ -816,7 +842,8 @@ function Kernel.getScript(path)
 
     local fHandle = fsObj.open(path, "r")
     if not fHandle then
-        Kernel.io.status("warn", "Script " .. path .. " is empty or failed to load")
+        Kernel.io.status("warn",
+                         "Script " .. path .. " is empty or failed to load")
         local func, _ = load("", "=" .. path, "t", _ENV)
         return func
     end
@@ -832,13 +859,12 @@ function Kernel.getScript(path)
     fsObj.close(fHandle)
 
     if script == "" then
-        Kernel.io.status("warn", "Script " .. path .. " is empty or failed to load")
+        Kernel.io.status("warn",
+                         "Script " .. path .. " is empty or failed to load")
     end
 
     local func, err = load(script, "=" .. path, "t", _ENV)
-    if not func then
-        Kernel.io.status("err", "Error loading: " .. err)
-    end
+    if not func then Kernel.io.status("err", "Error loading: " .. err) end
     return func
 end
 
