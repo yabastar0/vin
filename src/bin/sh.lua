@@ -140,7 +140,7 @@ local function shellLoop()
                 end
 
                 for _, dir in ipairs(directories) do
-                    term.setTextColor(0x0000F0)
+                    term.setTextColor(0x0F2FFF)
                     io.print(dir)
                     term.setTextColor(0xFFFFFF)
                 end
