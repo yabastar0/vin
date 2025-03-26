@@ -6,6 +6,9 @@ local TIME_WINDOW = 1
 local callCount = 0
 local lastReset = computer.uptime()
 
+local MOUNT_POINT = "/mnt/"
+local MOUNT_PREFIX_LENGTH = 4
+
 local function checkBudget()
     if computer.uptime() - lastReset >= TIME_WINDOW then
         callCount = 0
@@ -45,8 +48,12 @@ local function findDrives()
 
         local fs = component.proxy(address)
         if fs then
-            table.insert(drives, {addr = address, fs = fs})
-            Kernel.io.status("info", "Drive found: " .. address)
+            table.insert(drives, {
+                addr = address,
+                fs = fs,
+                mount = MOUNT_POINT .. address:sub(1, MOUNT_PREFIX_LENGTH)
+            })
+            Kernel.io.status("info", string.format("Drive found: %s (mount: %s)", address, MOUNT_POINT .. address:sub(1, MOUNT_PREFIX_LENGTH)))
         else
             Kernel.io.status("warn", "Failed to proxy drive " .. address)
         end
@@ -84,7 +91,7 @@ local function findPrimaryDrive(drives)
     end
 
     if bestDrive then
-        Kernel.io.status("warn", "Primary drive selected by space (not reccomended): [%s]" .. bestDrive.addr)
+        Kernel.io.status("warn", "Primary drive selected by space (not recommended): [%s]" .. bestDrive.addr)
         return bestDrive
     else
         Kernel.io.status("err", "No valid primary drive found.")
@@ -109,6 +116,19 @@ function stfs.getDrive(drive)
     return drive and drive.fs or stfs.primary.fs
 end
 
+function stfs.resolveMount(path)
+    if path:sub(1, #MOUNT_POINT) == MOUNT_POINT then
+        local mountName = path:sub(#MOUNT_POINT + 1, #MOUNT_POINT + MOUNT_PREFIX_LENGTH)
+        for _, drive in ipairs(allDrives) do
+            if drive.addr:sub(1, MOUNT_PREFIX_LENGTH) == mountName then
+                local subPath = path:sub(#MOUNT_POINT + MOUNT_PREFIX_LENGTH + 1)
+                return drive, subPath ~= "" and subPath or "/"
+            end
+        end
+    end
+    return stfs.primary, path
+end
+
 function stfs.spaceUsed(drive)
     local fs = stfs.getDrive(drive)
     if fs and fs.spaceUsed then
@@ -128,24 +148,29 @@ function stfs.spaceTotal(drive)
 end
 
 function stfs.open(drive, path, mode)
-    local fs = stfs.getDrive(drive)
+    local targetDrive, targetPath = stfs.resolveMount(path)
+    local fs = stfs.getDrive(drive or targetDrive)
+    
     if not fs or not fs.open then
         Kernel.io.status("err", "Invalid drive or open function missing")
+        return nil
     end
 
-    path = stfs.resolve(path)
-    local handle = fs.open(path, mode)
+    targetPath = stfs.resolve(targetPath)
+    local handle = fs.open(targetPath, mode)
     if not handle then
-        Kernel.io.status("err", string.format("Failed to open file: %s", path))
+        Kernel.io.status("err", string.format("Failed to open file: %s", targetPath))
+        return nil
     end
 
     return {
-        drive = drive,
+        drive = drive or targetDrive,
         handle = handle,
 
         write = function(self, data)
             if not self.handle or not fs.write then
                 Kernel.io.status("err", "Invalid file handle or write function missing")
+                return false
             end
             return fs.write(self.handle, data)
         end,
@@ -153,6 +178,7 @@ function stfs.open(drive, path, mode)
         read = function(self, count)
             if not self.handle or not fs.read then
                 Kernel.io.status("err", "Invalid file handle or read function missing")
+                return nil
             end
             return fs.read(self.handle, count)
         end,
@@ -160,6 +186,7 @@ function stfs.open(drive, path, mode)
         seek = function(self, whence, offset)
             if not self.handle or not fs.seek then
                 Kernel.io.status("err", "Invalid file handle or seek function missing")
+                return false
             end
             return fs.seek(self.handle, whence, offset)
         end,
@@ -167,6 +194,7 @@ function stfs.open(drive, path, mode)
         close = function(self)
             if not self.handle or not fs.close then
                 Kernel.io.status("err", "Invalid file handle or close function missing")
+                return
             end
             fs.close(self.handle)
             self.handle = nil
@@ -175,6 +203,7 @@ function stfs.open(drive, path, mode)
         readAll = function(self)
             if not self.handle or not fs.read then
                 Kernel.io.status("err", "Invalid file handle or read function missing")
+                return nil
             end
             local dataT = {}
             while true do
@@ -188,27 +217,33 @@ function stfs.open(drive, path, mode)
 end
 
 function stfs.touch(drive, path)
-    path = stfs.resolve(path)
-    local handle = stfs.open(drive, path, "w")
-    handle:close()
-    return true
+    local targetDrive, targetPath = stfs.resolveMount(path)
+    targetPath = stfs.resolve(targetPath)
+    local handle = stfs.open(drive or targetDrive, targetPath, "w")
+    if handle then
+        handle:close()
+        return true
+    end
+    return false
 end
 
 function stfs.mkDir(drive, path)
-    local fs = stfs.getDrive(drive)
+    local targetDrive, targetPath = stfs.resolveMount(path)
+    local fs = stfs.getDrive(drive or targetDrive)
     if fs and fs.makeDirectory then
-        path = stfs.resolve(path)
-        return fs.makeDirectory(path)
+        targetPath = stfs.resolve(targetPath)
+        return fs.makeDirectory(targetPath)
     else
         Kernel.io.status("err", "Invalid drive or makeDirectory function missing")
     end
 end
 
 function stfs.exists(drive, path)
-    local fs = stfs.getDrive(drive)
+    local targetDrive, targetPath = stfs.resolveMount(path)
+    local fs = stfs.getDrive(drive or targetDrive)
     if fs and fs.exists then
-        path = stfs.resolve(path)
-        return fs.exists(path)
+        targetPath = stfs.resolve(targetPath)
+        return fs.exists(targetPath)
     else
         Kernel.io.status("err", "Invalid drive or exists function missing")
     end
@@ -224,34 +259,46 @@ function stfs.isReadOnly(drive)
 end
 
 function stfs.write(drive, path, data)
-    path = stfs.resolve(path)
-    local file = stfs.open(drive, path, "w")
-    file:write(data)
-    file:close()
+    local targetDrive, targetPath = stfs.resolveMount(path)
+    targetPath = stfs.resolve(targetPath)
+    local file = stfs.open(drive or targetDrive, targetPath, "w")
+    if file then
+        file:write(data)
+        file:close()
+        return true
+    end
+    return false
 end
 
 function stfs.append(drive, path, data)
-    path = stfs.resolve(path)
-    local file = stfs.open(drive, path, "a")
-    file:write(data)
-    file:close()
+    local targetDrive, targetPath = stfs.resolveMount(path)
+    targetPath = stfs.resolve(targetPath)
+    local file = stfs.open(drive or targetDrive, targetPath, "a")
+    if file then
+        file:write(data)
+        file:close()
+        return true
+    end
+    return false
 end
 
 function stfs.list(drive, path)
-    local fs = stfs.getDrive(drive)
+    local targetDrive, targetPath = stfs.resolveMount(path)
+    local fs = stfs.getDrive(drive or targetDrive)
     if fs and fs.list then
-        path = stfs.resolve(path)
-        return fs.list(path)
+        targetPath = stfs.resolve(targetPath)
+        return fs.list(targetPath)
     else
         Kernel.io.status("err", "Invalid drive or list function missing")
     end
 end
 
 function stfs.lastModified(drive, path)
-    local fs = stfs.getDrive(drive)
+    local targetDrive, targetPath = stfs.resolveMount(path)
+    local fs = stfs.getDrive(drive or targetDrive)
     if fs and fs.lastModified then
-        path = stfs.resolve(path)
-        return fs.lastModified(path)
+        targetPath = stfs.resolve(targetPath)
+        return fs.lastModified(targetPath)
     else
         Kernel.io.status("err", "Invalid drive or lastModified function missing")
     end
@@ -276,49 +323,64 @@ function stfs.setLabel(drive, label)
 end
 
 function stfs.remove(drive, path)
-    local fs = stfs.getDrive(drive)
+    local targetDrive, targetPath = stfs.resolveMount(path)
+    local fs = stfs.getDrive(drive or targetDrive)
     if fs and fs.remove then
-        path = stfs.resolve(path)
-        return fs.remove(path)
+        targetPath = stfs.resolve(targetPath)
+        return fs.remove(targetPath)
     else
         Kernel.io.status("err", "Invalid drive or remove function missing")
     end
 end
 
 function stfs.size(drive, path)
-    local fs = stfs.getDrive(drive)
+    local targetDrive, targetPath = stfs.resolveMount(path)
+    local fs = stfs.getDrive(drive or targetDrive)
     if fs and fs.size then
-        path = stfs.resolve(path)
-        return fs.size(path)
+        targetPath = stfs.resolve(targetPath)
+        return fs.size(targetPath)
     else
         Kernel.io.status("err", "Invalid drive or size function missing")
     end
 end
 
 function stfs.read(drive, path, count)
-    path = stfs.resolve(path)
-    local file = stfs.open(drive, path, "r")
-    local data = file:read(count)
-    file:close()
-    return data
+    local targetDrive, targetPath = stfs.resolveMount(path)
+    targetPath = stfs.resolve(targetPath)
+    local file = stfs.open(drive or targetDrive, targetPath, "r")
+    if file then
+        local data = file:read(count)
+        file:close()
+        return data
+    end
+    return nil
 end
 
 function stfs.rename(drive, oldPath, newPath)
-    local fs = stfs.getDrive(drive)
+    local oldDrive, oldTarget = stfs.resolveMount(oldPath)
+    local newDrive, newTarget = stfs.resolveMount(newPath)
+
+    if oldDrive.addr ~= newDrive.addr then
+        Kernel.io.status("err", "Cannot rename across different drives")
+        return false
+    end
+
+    local fs = stfs.getDrive(drive or oldDrive)
     if fs and fs.rename then
-        oldPath = stfs.resolve(oldPath)
-        newPath = stfs.resolve(newPath)
-        return fs.rename(oldPath, newPath)
+        oldTarget = stfs.resolve(oldTarget)
+        newTarget = stfs.resolve(newTarget)
+        return fs.rename(oldTarget, newTarget)
     else
         Kernel.io.status("err", "Invalid drive or rename function missing")
     end
 end
 
 function stfs.isDirectory(drive, path)
-    local fs = stfs.getDrive(drive)
+    local targetDrive, targetPath = stfs.resolveMount(path)
+    local fs = stfs.getDrive(drive or targetDrive)
     if fs and fs.isDirectory then
-        path = stfs.resolve(path)
-        return fs.isDirectory(path)
+        targetPath = stfs.resolve(targetPath)
+        return fs.isDirectory(targetPath)
     else
         Kernel.io.status("err", "Invalid drive or isDirectory function missing")
     end
@@ -372,4 +434,17 @@ function stfs.combine(path1, path2)
     if path1 == "" then return path2 end
     if path2 == "" then return path1 end
     return path1 .. "/" .. path2
+end
+
+function stfs.getDisplayName(drive)
+    return drive.addr:sub(1, MOUNT_PREFIX_LENGTH)
+end
+
+if not stfs.exists(stfs.primary, "/mnt") then stfs.mkDir(stfs.primary, "mnt") end
+
+for _, drive in ipairs(allDrives) do
+    local mountPath = "/mnt/" .. drive.addr:sub(1, MOUNT_PREFIX_LENGTH)
+    if not stfs.exists(stfs.primary, mountPath) then
+        stfs.mkDir(stfs.primary, mountPath)
+    end
 end
